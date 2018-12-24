@@ -9,89 +9,91 @@
 #include "process.h"
 #include "threads/synch.h"
 
+
+
 static void syscall_handler (struct intr_frame *);
 //Shivam implimentation task 2 11/20
-void verifyAddress(const void *address);
-struct fileStructure* searchList(struct list* files, int fd);
-
+void verifyAddress(const void *);
+struct fileStructute* searchList(struct list* filesList, int fd);
 static struct semaphore fileSystemSema;
 
-
-struct fileStructure {
+struct fileStructute{
 	struct file* ptr;
 	int fd;
 	struct list_elem element;
-};
+}
+
 
 void
 syscall_init (void) 
 {
   intr_register_int (0x30, 3, INTR_ON, syscall_handler, "syscall");
-  //Shivam implimentation 20/11
   sema_init(&fileSystemSema, 1);
 }
 
 static void
-syscall_handler (struct intr_frame *f UNUSED){
-	//Shivam Implimnetation 12/7
+syscall_handler (struct intr_frame *f UNUSED) 
+{
+	//Shivam implimentation task 2 and 3 11/20
+  //printf ("system call!\n");
+  //thread_exit ();
 	verifyAddress(f->esp);
 
-	int systemCall = *((int *)(f->esp));
+	int systemCall = *(f->esp);
 
-	switch (systemCall){
+	switch(systemCall){
+		
+		case SYS_EXIT:
+			verifyAddress(f->esp + 4);
+			processExit(*((int *)(f->esp +4)));
+			break;
 
 		case SYS_READ:
-
 			verifyAddress(f->esp + 28);
-			verifyAddress(*((int *)(f->esp + 24)));
-			if(*((int *)(f->esp + 20)) ==0){
-				uint8_t* buffer = *((int *)(f->esp + 24));
+			verifyAddress(f->esp + 24);
+			if(*(f->esp + 20) == 0){
+				unit8_t* buffer = *((int *)(f->esp + 24));
 
 				for(int i = 0; i < *((int *)(f->esp + 28)); i++){
-					buffer[i] = input_getc();
+					buffer[i] = input_gcc();
 				}
 
 				f->eax = *((int *)(f->esp + 28));
 
 			}else{
 
-				struct fileStructure* filePtr = searchList(&thread_current()->filesList, *((int *)(f->esp + 20)));
+				struct fileStructre *filePtr = searchList(&thread_current()->filesList, *((int *)(f->esp + 20)));
 				if(NULL != filePtr){
 					sema_down(&fileSystemSema);
-					f->eax = file_read (filePtr->ptr, *((int *)(f->esp + 24)), *((int *)(f->esp + 28)));
+					f->eax = file_read(filePtr->ptr, *((int *)(f->esp + 24)), *((int *)(f->esp + 28)));
 					sema_up(&fileSystemSema);
 				}else{
-					f->eax=-1;
+					f->eax = -1;
 				}
 			}
+
 			break;
 
 		case SYS_WRITE:
 			verifyAddress(f->esp + 28);
-			verifyAddress(*((int *)(f->esp + 24)));
-			if(*((int *)(f->esp + 20)) == 1){
-
+			verifyAddress(f->esp + 24);
+			if(*(f->esp + 20) == 1){
 				putbuf(*((int *)(f->esp + 24)), *((int *)(f->esp + 28)));
+
 				f->eax = *((int *)(f->esp + 28));
 
 			}else{
 
-				struct fileStructure* filePtr = searchList(&thread_current()->filesList, *((int *)(f->esp + 20)));
+				struct fileStructre *filePtr = searchList(&thread_current()->filesList, *((int *)(f->esp + 20)));
 				if(NULL != filePtr){
-
 					sema_down(&fileSystemSema);
 					f->eax = file_write(filePtr->ptr, *((int *)(f->esp + 24)), *((int *)(f->esp + 28)));
 					sema_up(&fileSystemSema);
-
 				}else{
-					f->eax=-1;
+					f->eax = -1;
 				}
 			}
-			break;
 
-		case SYS_EXIT:
-			verifyAddress(f->esp + 4);
-			processExit(*((int *)(f->esp +4)));
 			break;
 
 		case SYS_HALT:
@@ -112,21 +114,43 @@ syscall_handler (struct intr_frame *f UNUSED){
 		case SYS_FILESIZE:
 			verifyAddress(f->esp + 4);
 			sema_down(&fileSystemSema);
-			f->eax = file_length(searchList(&thread_current()->filesList, *((int *)(f->esp +4))));
+			f->eax = file_length(searchList(&thread_current->filesList, *((int *)(f->esp +4))));
 			sema_up(&fileSystemSema);
 			break;
 
 		case SYS_SEEK:
 			verifyAddress(f->esp + 20);
 			sema_down(&fileSystemSema);
-			file_seek(searchList(&thread_current()->filesList, *((int *)(f->esp +16)))->ptr, *((int *)(f->esp +20)));
+			file_seek(searchList(&thread_current->filesList, *((int *)(f->esp +16)))->ptr, *((int *)(f->esp +20)));
 			sema_up(&fileSystemSema);
 			break;
 
 		case SYS_TELL:
 			verifyAddress(f->esp + 4);
 			sema_down(&fileSystemSema);
-			f->eax = file_tell(searchList(&thread_current()->filesList, *((int *)(f->esp +4))));
+			f->eax = file_tell(searchList(&thread_current->filesList, *((int *)(f->esp +4))));
+			sema_up(&fileSystemSema);
+			break;
+
+		case SYS_CLOSE:
+			verifyAddress(f->esp + 4);
+			sema_down(&fileSystemSema);
+			
+			struct list_elem* element;
+			
+			element = list_begin(&thread_current->filesList);
+			
+			while(element != list_end(&thread_current->filesList)){
+				struct fileStructure* newFile = list_entry(element, struct fileStructre, element);
+				if(newFile->fd == *((int *)(f->esp +4))){
+					file_close(newFile->ptr);
+					list_remove(element);
+					break;
+				}
+				element = list_next(element);
+			}
+			free(element);
+
 			sema_up(&fileSystemSema);
 			break;
 
@@ -142,64 +166,86 @@ syscall_handler (struct intr_frame *f UNUSED){
 			verifyAddress(f->esp + 4);
 			verifyAddress(* (int *)(f->esp + 4));
 			sema_down(&fileSystemSema);
-			
 			if(NULL != filesys_remove(* (int *)(f->esp + 4))){
 				f->eax = true;
 			}else{
 				f->eax = false;
 			}
-
 			sema_up(&fileSystemSema);
 			break;
 
 		case SYS_OPEN:
 			verifyAddress(f->esp + 4);
-			verifyAddress(*((int *)(f->esp + 4)));
-
+			verifyAddress(* (int *)(f->esp + 4));
 			sema_down(&fileSystemSema);
-			struct file* filePtr = filesys_open (*((int *)(f->esp + 4)));
+			struct file* filePtr = filesys_open(* (int *)(f->esp + 4));
 			sema_up(&fileSystemSema);
+
 			if(NULL != filePtr){
 				struct fileStructure* filePtr1;
-				filePtr1 = malloc(sizeof(filePtr1));
+				filePtr1 = malloc(sizeof(*filePtr1));
 				filePtr1->ptr = filePtr;
-				filePtr1->fd = thread_current()->fd_count;
-				thread_current()->fd_count++;
-				list_push_back (&thread_current()->filesList, &filePtr1->element);
+				filePtr1->fd = &thread_current()->fd_count;
 				f->eax = filePtr1->fd;
+				&thread_current()->fd_count++;
+				list_push_back(&thread_current()->filesList, &filePtr1->element);
 			}else{
 				f->eax = -1;
 			}
 			break;
 
-		case SYS_CLOSE:
-			verifyAddress(f->esp + 4);
-			sema_down(&fileSystemSema);
-			struct list_elem* elem;
-
-			struct fileStructure *newFile;
-			elem = list_begin (&thread_current()->filesList);
-
-			while( elem != list_end (&thread_current()->filesList)){
-
-				newFile = list_entry (elem, struct fileStructure, element);
-
-				if(newFile->fd == *((int *)(f->esp +4))){
-				  	file_close(newFile->ptr);
-				  	list_remove(elem);
-				}
-
-				elem = list_next (elem);
-			}
-
-    		free(newFile);
-
-			sema_up(&fileSystemSema);
-			break;
 	}
 }
 
-int processExecute(char *fileName){
+void verifyAddress(const void *address){
+
+	if(!is_user_vaddr(address)){
+		//invalid address hence exit process
+		processExit(-1);
+		return;
+
+	}
+
+	if(NULL == pagedir_get_page(thread_current()->pagedir, vaddr)){
+		//pafe fault hence exit
+		processExit(-1);
+		return;
+	}
+}
+
+void processExit(int exitValue){
+	struct list_elem *element;
+
+	element = list_begin(&thread_current()->parentThreadPtr->childProcessesList);
+
+	while(element != list_end(&thread_current()->parentThreadPtr->childProcessesList)){
+		struct child *childPtr = list_entry(element, struct child, element);
+
+		if(childPtr->threadID == thread_current()->tid){
+			childPtr->used = true;
+			childPtr->errorValue = exitValue;
+		}
+
+		element = list_next(element);
+	}
+
+	thread_current()->errorValue = exitValue;
+
+	if(exitValue == -100){
+		processExit(-1);
+	}
+
+	file_close(&thread_current()->ownFile);
+	closeFiles(&thread_current()->filesList);
+
+	if(thread_current()->parentThreadPtr->waitFortid == thread_current()->tid){
+		sema_up(&thread_current()->parentThreadPtr->childSema);
+	}
+
+	thread_exit();
+}
+
+int processExecute(* fileName){
 
 	sema_down(&fileSystemSema);
 
@@ -207,7 +253,7 @@ int processExecute(char *fileName){
 	strlcpy(token,fileName,strlen(fileName)+1);
 
 	char *dummy;
-	token = strtok_r(token," ",&dummy);
+	token = strtok_r(fileName," ",&dummy);
 
 	struct file *filePtr = filesys_open(token);
 
@@ -221,79 +267,25 @@ int processExecute(char *fileName){
 	}
 }
 
-void processExit(int exitValue){
-
-	struct list_elem *element;
-
-	element = list_begin(&thread_current()->parentThreadPtr->childProcessesList);
-
-	while(element != list_end(&thread_current()->parentThreadPtr->childProcessesList)){
-		struct child *childPtr = list_entry(element, struct child, elem);
-
-		if(childPtr->threadID == thread_current()->tid){
-			childPtr->used = true;
-			childPtr->errorValue = exitValue;
-		}
-
-		element = list_next(element);
-	}
-
-	thread_current()->errorValue = exitValue;
-
-	if(exitValue == -10){
-		processExit(-1);
-	}
-
-	if(thread_current()->parentThreadPtr->waitFortid == thread_current()->tid){
-		sema_up(&thread_current()->parentThreadPtr->childSema);
-	}
-
-	thread_exit();
-}
-
-void verifyAddress(const void *address){
-
-	if(!is_user_vaddr(address)){
-		//invalid address hence exit process
-		processExit(-1);
-		return;
-
-	}
-
-	if(NULL == pagedir_get_page(thread_current()->pagedir, address)){
-		//pafe fault hence exit
-		processExit(-1);
-		return;
-	}
-}
-
-struct fileStructure* searchList(struct list* filesList, int fd){
-
+struct fileStructute* searchList(struct list* filesList, int fd){
 	struct list_elem* element;
 	element = list_begin(filesList);
-	struct fileStructure* newFile;
-
 	while(element != list_end(filesList)){
-		newFile = list_entry(element, struct fileStructure, element);
+		struct fileStructure* newFile = list_entry(element, struct fileStructre, element);
 		if(newFile->fd == fd){
 			return newFile;
 		}
 		element = list_next(element);
 	}
-
-	return NULL;
 }
 
 void closeFiles(struct list* filesList){
-
 	struct list_elem* element;
-	
 	while(!list_empty(filesList)){
 		element = list_pop_front(filesList);
-		struct fileStructure* filePtr = list_entry(element, struct fileStructure, element);
+		struct fileStructure* filePtr = list_entry(element, struct fileStructute, element);
 		file_close(filePtr->ptr);
 		list_remove(element);
 		free(filePtr);
 	}
-
 }

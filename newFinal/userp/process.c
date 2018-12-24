@@ -20,7 +20,6 @@
 
 static thread_func start_process NO_RETURN;
 static bool load (const char *cmdline, void (**eip) (void), void **esp);
-static struct semaphore processSema;
 
 /* Starts a new thread running a user program loaded from
    FILENAME.  The new thread may be scheduled (and may even exit)
@@ -31,13 +30,12 @@ process_execute (const char *file_name)
 {
   char *fn_copy;
   //Shivam implimentation 11/15
-  sema_init(&processSema, 1);
   char *progArgumentsPtr;
-  char *dummy;
+  char *dummy = file_name;
 
+  char *Pointer;
   tid_t tid;
 
-  
   /* Make a copy of FILE_NAME.
      Otherwise there's a race between the caller and load(). */
   fn_copy = palloc_get_page (0);
@@ -46,24 +44,23 @@ process_execute (const char *file_name)
   strlcpy (fn_copy, file_name, PGSIZE);
 
   //Shivam implimentation 11/15
+  //+1 to include nul terminating in the end
   progArgumentsPtr = malloc(strlen(file_name)+1);
   strlcpy (progArgumentsPtr, file_name, strlen(file_name)+1);
-  progArgumentsPtr = strtok_r (progArgumentsPtr," ",&dummy);
-  
+  progArgumentsPtr = strtok_r(file_name ," ", &dummy);
+
   /* Create a new thread to execute FILE_NAME. */
   //SHivam implimentation 11/15 - passing just the ptr
+  //tid = thread_create (file_name, PRI_DEFAULT, start_process, fn_copy);
   tid = thread_create (progArgumentsPtr, PRI_DEFAULT, start_process, fn_copy);
-
+  //free alocated space
   free(progArgumentsPtr);
+
   if (tid == TID_ERROR)
-    palloc_free_page (fn_copy);
+    palloc_free_page (fn_copy); 
 
   //Shivam implimentation 11/15
   sema_down(&thread_current()->childSema);
-
-  if(thread_current()->loadSuccess == 0){
-    return -1;
-  }
 
   return tid;
 }
@@ -86,10 +83,17 @@ start_process (void *file_name_)
 
   /* If load failed, quit. */
   palloc_free_page (file_name);
-  //Shivam implimentation
-  sema_up(&thread_current()->parentThreadPtr->childSema);
-  if (!success) {
-    thread_exit();
+
+  if (!success){
+    //Shivam implimentation 11/15
+    thread_current()->parentThreadPtr->loadSuccess = 0;
+    //realease the lock hold by thread
+    sema_up(&thread_current()->parentThreadPtr->childSema);
+    thread_exit ();
+  }else{
+    thread_current()->parentThreadPtr->loadSuccess = 1;
+    //realease the lock hold by thread
+    sema_up(&thread_current->parentThreadPtr->childSema);
   }
 
   /* Start the user process by simulating a return from an
@@ -108,22 +112,20 @@ start_process (void *file_name_)
    child of the calling process, or if process_wait() has already
    been successfully called for the given TID, returns -1
    immediately, without waiting.
+
    This function will be implemented in problem 2-2.  For now, it
    does nothing. */
 int
-process_wait (tid_t child_tid) 
+process_wait (tid_t child_tid UNUSED) 
 {
   //Shivam implimentation 11/20
   struct list_elem* element;
   struct child* newChild;
   bool flag = false;
-
-  struct list_elem *e1=NULL;
-
-  element = list_begin(&thread_current()->childProcessesList);
-
-  while(element != list_end(&thread_current()->childProcessesList)){
-    struct child* child1 = list_entry(element, struct child, elem);
+  element = list_begin(&thread_current->childProcessesList);
+      
+  while(element != list_end(&thread_current->childProcessesList)){
+    struct child* child1 = list_entry(element, struct child, element);
     if(child1->threadID == child_tid){
       newChild = child1;
       flag = true;
@@ -132,21 +134,21 @@ process_wait (tid_t child_tid)
     element = list_next(element);
   }
 
-
   if(!flag){
+
     return -1;
   }
 
+  &thread_current()->waitFortid = newChild->threadID;
 
-  thread_current()->waitFortid = newChild->threadID;
-    
   if(!newChild->used){
     sema_down(&thread_current()->childSema);
   }
 
   int errorValue = newChild->errorValue;
   list_remove(element);
-  
+  free(element);
+
   return errorValue;
 }
 
@@ -154,22 +156,9 @@ process_wait (tid_t child_tid)
 void
 process_exit (void)
 {
-
   struct thread *cur = thread_current ();
   uint32_t *pd;
 
-  //Shivam implimentation 12/7
-  if(cur->errorValue==-10)
-    processExit(-1);
-
-    int exit_code = cur->errorValue;
-    printf("%s: exit(%d)\n",cur->name,exit_code);
-
-    sema_down(&processSema);
-    file_close(thread_current()->programFilePtr);
-    closeFiles(&thread_current()->filesList);
-    sema_up(&processSema);
-  
   /* Destroy the current process's page directory and switch back
      to the kernel-only page directory. */
   pd = cur->pagedir;
@@ -267,7 +256,8 @@ struct Elf32_Phdr
 #define PF_W 2          /* Writable. */
 #define PF_R 4          /* Readable. */
 
-static bool setup_stack (void **esp, char * file_name);
+//Shivam implimentation 11/15
+static bool setup_stack (void **esp, char *file_name);
 static bool validate_segment (const struct Elf32_Phdr *, struct file *);
 static bool load_segment (struct file *file, off_t ofs, uint8_t *upage,
                           uint32_t read_bytes, uint32_t zero_bytes,
@@ -287,18 +277,15 @@ load (const char *file_name, void (**eip) (void), void **esp)
   bool success = false;
   int i;
 
-  //Shivam implimentation
-  thread_current()->parentThreadPtr->loadSuccess=0;
 
   /* Allocate and activate page directory. */
   t->pagedir = pagedir_create ();
-  if (t->pagedir == NULL)
+  if (t->pagedir == NULL) 
     goto done;
   process_activate ();
-  
-  /* Open executable file. */
 
-//Shivam implimentation 11/15
+  /* Open executable file. */
+  //Shivam implimentation 11/15
   char *progArgumentsPtrNew = malloc(strlen(file_name)+1);
   //+1 add terminating string at the end
   strlcpy(progArgumentsPtrNew,file_name, strlen(file_name)+1);
@@ -307,10 +294,10 @@ load (const char *file_name, void (**eip) (void), void **esp)
 
   progArgumentsPtrNew = strtok_r(progArgumentsPtrNew, " ", &dummy);
 
+  //file = filesys_open (file_name);
   file = filesys_open (progArgumentsPtrNew);
   free(progArgumentsPtrNew);
 
-  
   if (file == NULL) 
     {
       printf ("load: %s: open failed\n", file_name);
@@ -390,22 +377,21 @@ load (const char *file_name, void (**eip) (void), void **esp)
     }
 
   /* Set up stack. */
-  if (!setup_stack (esp,file_name))
+    //SHivam implimentation 11/15 - change of method name only
+  if (!setup_stack (esp, file_name))
     goto done;
 
   /* Start address. */
   *eip = (void (*) (void)) ehdr.e_entry;
+
   success = true;
-  //SHivam implimentation
-  thread_current()->parentThreadPtr->loadSuccess=1;
 
   file_deny_write(file);
+  thread_current()->ownFile = file;
 
-  thread_current()->programFilePtr = file;
-  
  done:
   /* We arrive here whether the load is successful or not. */
- //release_filesys_lock();
+  //file_close (file);
   return success;
 }
 
@@ -456,17 +442,20 @@ validate_segment (const struct Elf32_Phdr *phdr, struct file *file)
 
   /* It's okay. */
   return true;
-
 }
 
 /* Loads a segment starting at offset OFS in FILE at address
    UPAGE.  In total, READ_BYTES + ZERO_BYTES bytes of virtual
    memory are initialized, as follows:
+
         - READ_BYTES bytes at UPAGE must be read from FILE
           starting at offset OFS.
+
         - ZERO_BYTES bytes at UPAGE + READ_BYTES must be zeroed.
+
    The pages initialized by this function must be writable by the
    user process if WRITABLE is true, read-only otherwise.
+
    Return true if successful, false if a memory allocation error
    or disk read error occurs. */
 static bool
@@ -517,7 +506,7 @@ load_segment (struct file *file, off_t ofs, uint8_t *upage,
 /* Create a minimal stack by mapping a zeroed page at the top of
    user virtual memory. */
 static bool
-setup_stack (void **esp, char * file_name) 
+setup_stack (void **esp, char *file_name) 
 {
   uint8_t *kpage;
   bool success = false;
@@ -527,44 +516,36 @@ setup_stack (void **esp, char * file_name)
     {
       success = install_page (((uint8_t *) PHYS_BASE) - PGSIZE, kpage, true);
       if (success)
-        *esp = PHYS_BASE;
+        *esp = PHYS_BASE-12; //Shivam implimentation of Argument Passing
       else
         palloc_free_page (kpage);
     }
 
-  char *token;
-  char *dummy;
-  int argCount = 0;
-  int i=0;
-
-  char * copy = malloc(strlen(file_name)+1);
-  strlcpy (copy, file_name, strlen(file_name)+1);
-
   //Shivam implimentation 11/15
-  token = strtok_r(copy," ",&dummy);
-  
-  while(NULL != token){
-    argCount++;
-    token = strtok_r(NULL," ",&dummy);
-  }
+    char *token;
+    char *dummy = file_name;
+    int argCount = 0;
+    int i=0;
 
-  int *argumentPtr = calloc(argCount,sizeof(int));
+    while((token = strtok_r(dummy," ",&dummy))){
+      argCount++;
+    }
 
-  token = strtok_r (file_name, " ", &dummy);
-  //store tokens in stack
-  while(NULL != token){
-    *esp = *esp - (strlen(token)+1);
-    memcpy(*esp, token, strlen(token)+1);
-    argumentPtr[i] = *esp;  //store address of stack pointer to be moved later
-    i++;
-    token = strtok_r(NULL," ",&dummy);
-  }
+    int *argumentPtr = calloc(argCount, sizeof(int));
 
-  //append 0 if length less then 4
-  while((int)(*esp)%4!=0) {
-    *esp = *esp - 1;
-    (*(char*)(*esp)) = '0';
-  }
+    //store tokens in stack
+    while((token = strtok_r(file_name," ",&dummy))){
+      *esp = *esp - (strlen(token)+1);
+      memcpy(*esp, token, strlen(token)+1);
+      argumentPtr[i] = *esp;  //store address of stack pointer to be moved later
+      i++;
+    }
+
+    //append 0 if length less then 4
+    while((int)(*esp)%4!=0) {
+        *esp = *esp - 1;
+        (*(char*)(*esp)) = '0';
+    }
 
     //store sentinel
     *esp -= 4;
@@ -589,7 +570,6 @@ setup_stack (void **esp, char * file_name)
     (*(int*)(*esp)) = 0;
 
     free(argumentPtr);
-    //hex_dump(PHYS_BASE-128, PHYS_BASE-128, 128, true);
 
   return success;
 }
